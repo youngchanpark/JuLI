@@ -121,6 +121,7 @@ callfusion = function(CaseBam=NULL,
   for (bam_path in CaseBam) {
       StatDat <- measureBAMStats(bam_path)
       
+      # TODO: Change the list item names to something more meaningful later
       Stats[[bam_path]] = list(
           chr = strsplit(StatDat$Chromosome, ';') %>% unlist(),
           readlen = StatDat$ReadLength,
