@@ -7,7 +7,7 @@
 #' @examples
 #' callfusion()
 
-callfusion=function(CaseBam=NULL,
+callfusion = function(CaseBam=NULL,
                     ControlBam=NULL,
                     TestID=NULL,
                     OutputPath=NULL,
@@ -25,29 +25,78 @@ callfusion=function(CaseBam=NULL,
                     NucDiv=TRUE,
                     SplitRatio=0.7,
                     MatchBase=10,
-                    Log=FALSE){
+                    Log=FALSE) {
 
-  if(isEmpty(CaseBam)){MessageFun(1)}
-  if(any(grepl(',',CaseBam))){CaseBam=unlist(strsplit(CaseBam,','))}
-  if(any(grepl(',',TestID))){TestID=unlist(strsplit(TestID,','))}
-  if(isEmpty(TestID)|length(CaseBam)!=length(TestID)){TestID = gsub('^.+/','',CaseBam)}
-  if(isEmpty(OutputPath)){OutputPath = gsub(paste0('/',gsub('^.+/','',CaseBam[1])),'',CaseBam[1])}
+  if (isEmpty(CaseBam)) {
+    MessageFun('A path to CaseBam file is required.')
+  }
+  
+  comma_sep_multiple_bams <- any(grepl(',', CaseBam))
+  if (comma_sep_multiple_bams) {
+    CaseBam <- unlist(strsplit(CaseBam, ','))
+  }
 
-  Thread=as.numeric(Thread);AnalysisUnit=as.numeric(AnalysisUnit);MinMappingQuality=as.numeric(MinMappingQuality);SplitCutoff=as.numeric(SplitCutoff);DiscordantCutoff=as.numeric(DiscordantCutoff);SplitRatio=as.numeric(SplitRatio);MatchBase=as.numeric(MatchBase)
-  NucDiv = as.logical(NucDiv);Log = as.logical(Log)
+  comma_sep_test_ids <- any(grepl(',',TestID))
+  if (comma_sep_test_ids) {
+    TestID <- unlist(strsplit(TestID, ','))
+  }
+  if (isEmpty(TestID) | length(CaseBam) != length(TestID)) {
+    TestID <- gsub('^.+/','',CaseBam)
+  }
+  if (isEmpty(OutputPath)) {
+    OutputPath <- gsub(paste0('/',gsub('^.+/','',CaseBam[1])),'',CaseBam[1])
+  }
+
+  Thread            <- as.numeric(Thread)
+  AnalysisUnit      <- as.numeric(AnalysisUnit)
+  MinMappingQuality <- as.numeric(MinMappingQuality)
+  DiscordantCutoff  <- as.numeric(DiscordantCutoff)
+  SplitCutoff       <- as.numeric(SplitCutoff)
+  SplitRatio        <- as.numeric(SplitRatio)
+  MatchBase         <- as.numeric(MatchBase)
+  
+  NucDiv            <- as.logical(NucDiv)
+  Log               <- as.logical(Log)
+
+
   registerDoMC(Thread)
   options(scipen = 999)
   SplitCutoff = ifelse(SplitCutoff < 2,2,SplitCutoff)
   DiscordantCutoff = ifelse(SplitCutoff < 3,3,DiscordantCutoff)
-  mat=matrix(0,5,5,dimnames=list(c("A","T","G","C","N"),c("A","T","G","C","N")))
-  mat["A","A"]=mat["C","C"]=mat["G","G"]=mat["T","T"]=1
+  
+  mat <- list(
+    c(1, 0, 0, 0, 0),
+    c(0, 1, 0, 0, 0),
+    c(0, 0, 1, 0, 0),
+    c(0, 0, 0, 1, 0),
+    c(0, 0, 0, 0, 1)
+  )
+  mat <- matrix(
+      unlist(mat), 
+      nrow = 5, 
+      ncol = 5, 
+      dimnames = list(
+          c("A","T","G","C","N"),
+          c("A","T","G","C","N")
+          )
+  )
 
-  if(isEmpty(Refgene)|isEmpty(Gap)){MessageFun(2)}
-  ref <<- fread(Refgene,showProgress = F) %>% setNames(paste0('V',c(1:ncol(.))))
-  GapData <<- fread(Gap,showProgress = F) %>% .[,c(2,3,4)] %>% setNames(c('chr','str','end'))
-  if(isEmpty(Reference)){MessageFun(6)}
-  in.fa <<- FaFile(Reference)
+  if (isEmpty(Refgene) | isEmpty(Gap)) {
+    MessageFun('Paths to reference files (Refgene and Gap) are required.')
+  }
+  ref     <<- data.table::fread(Refgene,showProgress = F) %>% 
+                  setNames(paste0('V',c(1:ncol(.))))
 
+  GapData <<- data.table::fread(Gap,showProgress = F) %>%
+                  .[,c(2,3,4)] %>%
+                  setNames(c('chr','str','end'))
+  
+  if (isEmpty(Reference)) {
+    MessageFun('Reference fasta is required.')
+  }
+  in.fa    <- Rsamtools::FaFile(Reference)
+
+  # Index all the input BAM files if not already indexed. 
   invisible(lapply(CaseBam,function(x){IndexFun(x,ControlBam)}))
 
   writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ",
@@ -58,35 +107,29 @@ callfusion=function(CaseBam=NULL,
 
   writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","JuLI v0.1.6"))
 
+
+
+
+
+
+
+
+  # Measure BAM Statistics ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","Measuring bam statistics"))
 
-  Stats <<- list()
-  for(m in seq_len(length(CaseBam))){
-    InputBam=CaseBam[m]
-    bam.info=seqinfo(BamFile(InputBam))
-    sl=seqlengths(bam.info)
-    chr=seqnames(bam.info) %>% .[. %in% c(paste0('chr',c(c(1:22),'X','Y')),c(c(1:22),'X','Y'))] #update v0.1.4: adding chromosome name style
-
-    readlen<<-scanBam(BamFile(InputBam,yieldSize=1000),param=ScanBamParam(what='seq')) %>% data.frame() %>% .[,1] %>% nchar() %>% median()
-
-    out=foreach(c=1:length(chr),.options.multicore=list(preschedule=FALSE)) %dopar% {
-      tmp=scanBam(InputBam,param=ScanBamParam(which=GRanges(chr[c],IRanges(1,sl[chr[c]])),what=c('cigar','isize'),mapqFilter=MinMappingQuality)) %>% rbindlist()
-      isize=tmp$isize %>% abs()
-      TotalReadNo=nrow(tmp)
-      SplitReadNo=tmp$cigar %>% .[.!='100M'] %>% .[grepl('S',.)] %>% length()
-      return(list(isize,TotalReadNo,SplitReadNo))
-    }
-
-    medis <<- out %>% sapply(.,function(x){x[[1]]}) %>% unlist() %>% median(.,na.rm=T)
-    TotalReadNumber= out %>% sapply(.,function(x){x[[2]]}) %>% sum()
-    SplitReadNumber= out %>% sapply(.,function(x){x[[3]]}) %>% sum()
-
-    StatDat=data.table(Chromosome=paste(chr,collapse=';'),ReferenceLength=sum(as.numeric(sl[names(sl) %in% chr])),TotalReadNumber,SplitReadNumber,MedianInsertSize=medis,ReadLength=readlen)
-    fwrite(StatDat,paste0(OutputPath,"/",TestID[m],".BamStat.txt"),sep='\t',showProgress=F)
-
-    Stats[[m]]=list(chr=chr,readlen=readlen,medis=medis)
+  Stats <- list()
+  for (bam_path in CaseBam) {
+      StatDat <- measureBAMStats(bam_path)
+      
+      Stats[[bam_path]] = list(
+          chr = strsplit(StatDat$Chromosome, ';') %>% unlist(),
+          readlen = StatDat$ReadLength,
+          medis = StatDat$MedianInsertSize
+      )
   }
 
+
+  # Identifying Candidate Breaks ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","Identifying candidate breaks"))
 
   chr = lapply(seq_len(length(CaseBam)),function(x){Stats[[x]]$chr}) %>% unlist() %>% unique()
@@ -165,8 +208,12 @@ callfusion=function(CaseBam=NULL,
 
   bedLog=bed[,c(1,2,3)] %>% mutate(DiscordantPairLog="Pass",ProperPairLog="Pass")
 
-  if(!isEmpty(ControlBam)){
 
+
+
+
+  # Filtering Breaks in Control BAM ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  if(!isEmpty(ControlBam)){
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","Filtering breaks in control bam"))
 
     out=foreach(c=1:length(chr),.options.multicore=list(preschedule=FALSE)) %dopar% {
@@ -206,8 +253,10 @@ callfusion=function(CaseBam=NULL,
     bedLog=logfun(Log,bedLog,bed,5,"Break in the control")
   }
 
-  if(!isEmpty(ControlPanel)){
 
+
+  # Filtering Breaks in Control Panel ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  if(!isEmpty(ControlPanel)){
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","Filtering breaks in control panel"))
 
     ConPanbed=fread(ControlPanel,sep='\t',showProgress=F)
@@ -233,6 +282,9 @@ callfusion=function(CaseBam=NULL,
   bed_D=bed_P=data.table(matrix(ncol=6))[0,]
 
 
+
+
+  # Analysing Discordant Pairs ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   if(nrow(bedD)!= 0){
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","Analysing discordant pairs"))
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","-Counting supporting reads"))
@@ -343,6 +395,10 @@ callfusion=function(CaseBam=NULL,
     bedLog=logfun(Log,bedLog,bedD,4,"Reads count under the cutoff")
   }
 
+
+
+
+  # Generating Consensus Contigs ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   if(nrow(bedD)!= 0){
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","-Generating consensus contigs"))
     bed.ran=ranfun(bedD$chr,AnalysisUnit)
@@ -411,6 +467,10 @@ callfusion=function(CaseBam=NULL,
     bedD=bedD %>% select(chr,pos,ori,splno,disno,seq,qnames,MeanMapq)
   }
 
+
+
+
+  # Comparing Contigs Between Breaks ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   if(nrow(bedD)!= 0){
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","-Comparing contigs between breaks"))
     nbed=rbindlist(foreach(i=1:nrow(bedD)) %dopar% {data.table(bedD[i,c('chr','pos','ori','splno','disno','seq','MeanMapq')],qname=unlist(strsplit(bedD$qnames[i],'/')))})
@@ -605,6 +665,9 @@ callfusion=function(CaseBam=NULL,
   }
 
 
+
+
+  # Analysing Proper Pairs ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   if(nrow(bedP)!= 0){
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","Analysing proper pairs"))
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","-Counting supporting reads"))
@@ -674,6 +737,10 @@ callfusion=function(CaseBam=NULL,
     bedLog=logfun(Log,bedLog,bedP,5,"Reads count under the cutoff")
   }
 
+
+
+
+  # Generating Consensus Contigs ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   if(nrow(bedP)!= 0){
     writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","-Generating consensus contigs"))
     bed.ran=ranfun(bedP$chr,AnalysisUnit)
@@ -743,6 +810,9 @@ callfusion=function(CaseBam=NULL,
     tbed=tbed %>% select(chr,pos,ori,splno,disno,seq)
   }
 
+
+
+  # Comparing Contigs Between Breaks ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   if(nrow(bedP)!= 0){
     if(nrow(tbed)!= 0){
       writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","-Comparing contigs between breaks"))
@@ -859,6 +929,9 @@ callfusion=function(CaseBam=NULL,
     }
   }
 
+
+
+  # Generate Output ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   writeLines(paste0("[",format(Sys.time(),"%Y-%b-%d %H:%M:%S"),"] ","Output generation"))
   for(m in seq_len(length(CaseBam))){
     OutputGenFun(OutputList[[m]],OutputPath,TestID[m])
